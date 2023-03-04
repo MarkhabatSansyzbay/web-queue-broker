@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sync"
 
 	"github.com/sirupsen/logrus"
 )
@@ -11,6 +12,7 @@ import (
 var (
 	log = logrus.New()
 	m   = make(map[string]*linkedList)
+	mu  *sync.RWMutex
 )
 
 type linkedList struct {
@@ -51,23 +53,31 @@ func handleQueue(w http.ResponseWriter, r *http.Request) {
 
 		queue := r.URL.Path
 
+		mu.Lock()
 		if _, ok := m[queue]; !ok {
 			m[queue] = &linkedList{}
 		}
-
 		m[queue].addLast(msg)
+		mu.Unlock()
 
 		log.Infof("add %s to queue %s", msg, queue)
-
-		w.WriteHeader(http.StatusOK)
 	case http.MethodGet:
 		queue := r.URL.Path
 
+		mu.RLock()
 		val, ok := m[queue]
+		mu.RUnlock()
+
 		if ok {
 			msg := val.head.data
 			w.Write([]byte(msg))
 			m[queue].deleteFirst()
+
+			if val.head == nil {
+				mu.Lock()
+				delete(m, queue)
+				mu.Unlock()
+			}
 
 			log.Infof("get %s from queue %s", msg, queue)
 		} else {
