@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
+	"time"
 
 	"github.com/sirupsen/logrus"
 )
@@ -12,7 +14,7 @@ import (
 var (
 	log = logrus.New()
 	m   = make(map[string]*linkedList)
-	mu  *sync.RWMutex
+	mu  = &sync.RWMutex{}
 )
 
 type linkedList struct {
@@ -57,39 +59,85 @@ func handleQueue(w http.ResponseWriter, r *http.Request) {
 		if _, ok := m[queue]; !ok {
 			m[queue] = &linkedList{}
 		}
-		m[queue].addLast(msg)
+		m[queue].pushBack(msg)
 		mu.Unlock()
 
 		log.Infof("add %s to queue %s", msg, queue)
 	case http.MethodGet:
 		queue := r.URL.Path
+		timeParam := r.URL.Query().Get("timeout")
+		if timeParam != "" {
+			log.Infof("request with timeout - %s seconds", timeParam)
 
-		mu.RLock()
-		val, ok := m[queue]
-		mu.RUnlock()
-
-		if ok {
-			msg := val.head.data
-			w.Write([]byte(msg))
-			m[queue].deleteFirst()
-
-			if val.head == nil {
-				mu.Lock()
-				delete(m, queue)
-				mu.Unlock()
+			timeout, err := strconv.Atoi(timeParam)
+			if err != nil {
+				http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+				return
 			}
 
-			log.Infof("get %s from queue %s", msg, queue)
-		} else {
-			http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
-		}
+			msgChan := make(chan string)
+			go func() {
+				for {
+					if msg := firstFromQueue(queue); msg != "" {
+						msgChan <- msg
+					}
+				}
+			}()
 
+			// for {
+			// 	if msg := firstFromQueue(queue); msg != "" {
+			// 		w.Write([]byte(msg))
+
+			// 		log.Infof("get %s from queue %s", msg, queue)
+
+			// 		break
+			// 	}
+			// }
+
+			select {
+			case <-time.After(time.Duration(timeout) * time.Second):
+				http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+			case msg := <-msgChan:
+				w.Write([]byte(msg))
+
+				log.Infof("get %s from queue %s", msg, queue)
+			}
+
+		} else {
+			if msg := firstFromQueue(queue); msg != "" {
+				w.Write([]byte(msg))
+
+				log.Infof("get %s from queue %s", msg, queue)
+			} else {
+				http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+			}
+		}
 	default:
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 	}
 }
 
-func (l *linkedList) addLast(data string) {
+func firstFromQueue(queue string) string {
+	var msg string
+	mu.RLock()
+	if _, ok := m[queue]; ok {
+		msg = m[queue].firstData()
+		m[queue].deleteFirst()
+	}
+	mu.RUnlock()
+
+	return msg
+}
+
+func (l *linkedList) firstData() string {
+	if l.head == nil {
+		return ""
+	}
+
+	return l.head.data
+}
+
+func (l *linkedList) pushBack(data string) {
 	newNode := &node{
 		data: data,
 	}
