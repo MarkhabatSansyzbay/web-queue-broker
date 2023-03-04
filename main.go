@@ -4,9 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strconv"
 	"sync"
-	"time"
 
 	"github.com/sirupsen/logrus"
 )
@@ -64,54 +62,16 @@ func handleQueue(w http.ResponseWriter, r *http.Request) {
 
 		log.Infof("add %s to queue %s", msg, queue)
 	case http.MethodGet:
+		// TODO: handling request with param timeout
 		queue := r.URL.Path
-		timeParam := r.URL.Query().Get("timeout")
-		if timeParam != "" {
-			log.Infof("request with timeout - %s seconds", timeParam)
+		if msg := firstFromQueue(queue); msg != "" {
+			w.Write([]byte(msg))
 
-			timeout, err := strconv.Atoi(timeParam)
-			if err != nil {
-				http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
-				return
-			}
-
-			msgChan := make(chan string)
-			go func() {
-				for {
-					if msg := firstFromQueue(queue); msg != "" {
-						msgChan <- msg
-					}
-				}
-			}()
-
-			// for {
-			// 	if msg := firstFromQueue(queue); msg != "" {
-			// 		w.Write([]byte(msg))
-
-			// 		log.Infof("get %s from queue %s", msg, queue)
-
-			// 		break
-			// 	}
-			// }
-
-			select {
-			case <-time.After(time.Duration(timeout) * time.Second):
-				http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
-			case msg := <-msgChan:
-				w.Write([]byte(msg))
-
-				log.Infof("get %s from queue %s", msg, queue)
-			}
-
+			log.Infof("get %s from queue %s", msg, queue)
 		} else {
-			if msg := firstFromQueue(queue); msg != "" {
-				w.Write([]byte(msg))
-
-				log.Infof("get %s from queue %s", msg, queue)
-			} else {
-				http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
-			}
+			http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		}
+
 	default:
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 	}
